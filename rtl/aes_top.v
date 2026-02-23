@@ -40,8 +40,14 @@ module aes_top(
   // --------------------------------------------------------------------------
   reg [15:0] lfsr;
   reg        step_en_r;
+  reg        step_en_next;
   wire       lfsr_fb = lfsr[15] ^ lfsr[13] ^ lfsr[12] ^ lfsr[10];
   wire       step_en = step_en_r;
+
+  // Dummy switching noise generator
+  reg [511:0] noise_reg; 
+  wire [15:0] prn16 = lfsr;
+  wire [511:0] weak_mask   = {32{~prn16}};
 
   aes_core u_core (
     .clk(clk),
@@ -83,16 +89,26 @@ module aes_top(
       done       <= 1'b0;
       lfsr <= 16'hACE1;
       step_en_r <= 1'b1;
+      noise_reg <= 512'd0;
     end else begin
       // defaults
       core_start <= 1'b0;
       done       <= 1'b0;
 
-      lfsr <= {lfsr[14:0], lfsr_fb};
-      // default: not stall
-      step_en_r <= 1'b1; 
+      if (core_busy) lfsr <= {lfsr[14:0], lfsr_fb};
+      // Use combinational assignment to avoid 1-cycle lag from nonblocking assignments
+      step_en_next = 1'b1;
       if (core_busy) begin
-        step_en_r <= (lfsr[0] | lfsr[1]); // 75% advance, 25% stall
+        step_en_next = (lfsr[0] | lfsr[1]); // 75% advance, 25% stall
+      end
+      step_en_r <= step_en_next;
+
+      // Strong noise during stall cycles, weak noise during active cycles
+      if (core_busy) begin
+        if (step_en_next) // If not stalled: weak flip
+          noise_reg <= noise_reg ^ weak_mask;
+        else // If stalled: all bits are fliped
+          noise_reg <= ~noise_reg;
       end
 
       case (state)
