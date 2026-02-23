@@ -17,6 +17,9 @@ module tb_fault;
   wire [127:0] ciphertext;
   wire        fault_flag;
 
+  // Time-out circles
+  localparam integer TIMEOUT_CYCLES = 4000;
+
   // Instantiate DUT (fault-defense top)
   aes_top dut (
     .clk(clk),
@@ -56,10 +59,19 @@ module tb_fault;
     end
   endtask
 
+  // Timeout
   task automatic wait_done();
+    integer cycles;
     begin
+      cycles = 0;
       while (done !== 1'b1) begin
         @(posedge clk);
+        cycles = cycles + 1;
+        if (cycles > TIMEOUT_CYCLES) begin
+          $display("[TIMEOUT] no done after %0d cycles (busy=%0d fault_flag=%0d)",
+                   TIMEOUT_CYCLES, busy, fault_flag);
+          $finish;
+        end
       end
     end
   endtask
