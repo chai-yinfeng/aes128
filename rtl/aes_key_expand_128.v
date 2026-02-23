@@ -15,6 +15,8 @@
 // Word layout (big-endian):
 //   w0 = key_in[127:96], w1 = [95:64], w2 = [63:32], w3 = [31:0]
 
+`timescale 1ns/1ps
+
 module aes_key_expand_128 (
     input  wire [127:0] key_in,
     input  wire [7:0]   rcon,

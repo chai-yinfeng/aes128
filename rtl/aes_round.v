@@ -19,6 +19,8 @@
 //   row2: 2,6,10,14
 //   row3: 3,7,11,15
 
+`timescale 1ns/1ps
+
 module aes_round (
     input  wire [127:0] state_in,
     input  wire [127:0] round_key_in,

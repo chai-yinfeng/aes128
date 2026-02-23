@@ -17,10 +17,12 @@ root/
 │  └─ aes_sbox.v             # AES forward S-box (LUT)
 ├─ tb/
 │  └─ tb_aes128.sv           # testbench: reads vectors.txt and compares outputs
+│  └─ tb_fault.sv            # testbench: run fault attack and verify the defense
 ├─ scripts/
 │  └─ gen_vectors.py         # generates OpenSSL reference vectors (ECB, 1-block, no pad)
 ├─ run.sh                    # one-command: generate vectors, compile, simulate
-├─ vectors.txt               # generated test vectors (key pt ct_ref)
+├─ run_fault.sh              # based on run.sh, but add verification for fault defense
+├─ vectors.txt               # generated test vectors (key pt ct_ref) [will be ignored]
 └─ .gitignore
 ```
 
@@ -91,7 +93,48 @@ RESULT: PASS
 
 ---
 
-## Notes
+### Notes
 
 * Baseline correctness is required before adding fault/power countermeasures.
-* Build outputs (e.g., `sim.out`, `*.vcd`) are typically ignored by `.gitignore`.
+* `vectors.txt` and build outputs (e.g., `sim.out`, `*.vcd`) are typically ignored by `.gitignore`.
+
+---
+
+## Fault Defense: Temporal Redundancy (Compute-and-Compare)
+
+### Summary
+
+A fault-detection countermeasure is implemented using **temporal redundancy**:
+
+* Run AES-128 encryption **twice** on the same `(key, plaintext)`
+* Compare the two ciphertexts
+
+  * If equal: output ciphertext and set `fault_flag=0`
+  * If mismatch: set `fault_flag=1` and suppress valid output (ciphertext is forced to `0`)
+
+This targets **transient fault injection** (e.g., single-cycle bit flips during computation).
+
+### Interface
+
+`aes_top` exposes an additional output:
+
+* `fault_flag`: indicates mismatch between the two computations
+
+### How to Run
+
+Baseline correctness against OpenSSL:
+
+```bash
+./run.sh
+```
+
+Fault-injection validation:
+
+```bash
+./run_fault.sh
+```
+
+### Fault Injection Method (Simulation)
+
+`tb/tb_fault.sv` injects a transient fault via `force/release` on the internal state register
+during the encryption window, then checks that `fault_flag` asserts.

@@ -1,10 +1,11 @@
 # build outputs
 sim.out
+sim_fault.out
 *.vcd
 *.log
 
 # generated vectors
-# vectors.txt
+vectors.txt
 
 # OS/editor
 .DS_Store

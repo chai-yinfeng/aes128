@@ -6,6 +6,8 @@
 // Later, if you implement side-channel defenses, this module is often a primary
 // target for masking or alternative implementations.
 
+`timescale 1ns/1ps
+
 module aes_sbox (
     input  wire [7:0] in_byte,
     output reg  [7:0] out_byte

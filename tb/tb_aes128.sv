@@ -25,7 +25,8 @@ module tb_aes128;
     .plaintext(plaintext),
     .busy(busy),
     .done(done),
-    .ciphertext(ciphertext)
+    .ciphertext(ciphertext),
+    .fault_flag(fault_flag)
   );
 
   // Helpers

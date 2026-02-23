@@ -20,6 +20,8 @@
 // This matches common test vectors when you load plaintext/key as hex
 // in big-endian byte order.
 
+`timescale 1ns/1ps
+
 module aes_core (
     input  wire         clk,
     input  wire         rst,        // synchronous reset, active-high
