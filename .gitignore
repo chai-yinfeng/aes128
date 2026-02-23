@@ -1,0 +1,12 @@
+# build outputs
+sim.out
+*.vcd
+*.log
+
+# generated vectors
+# vectors.txt
+
+# OS/editor
+.DS_Store
+.vscode/
+.idea/
