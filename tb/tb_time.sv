@@ -16,6 +16,17 @@ module tb_aes128;
   wire        done;
   wire [127:0] ciphertext;
 
+  // Declare fault_flag to avoid implicit wire warning
+  wire fault_flag;
+
+  // Add some variables to record latency stats and timeout
+  integer lat_min, lat_max;
+  integer lat_sum;
+  integer lat_hist[0:63];
+  integer i;
+  integer j;
+  localparam integer TIMEOUT_CYCLES = 2000;
+
   // Instantiate DUT
   aes_top dut (
     .clk(clk),
@@ -39,6 +50,7 @@ module tb_aes128;
 
   // Task: one encryption transaction
   task automatic run_one(input [127:0] k, input [127:0] pt, input [127:0] expected);
+    integer cycles;
     begin
       // Apply inputs
       key       = k;
@@ -49,11 +61,26 @@ module tb_aes128;
       start = 1'b1;
       @(negedge clk);
       start = 1'b0;
-
-      // Wait for done
+      
+      // Wait for done with timeout and measure latency
+      cycles = 0;
       while (done !== 1'b1) begin
         @(posedge clk);
+        cycles = cycles + 1;
+        if (cycles > TIMEOUT_CYCLES) begin
+          $display("[TIMEOUT] key=%032x pt=%032x (no done after %0d cycles) busy=%0d",
+                   k, pt, TIMEOUT_CYCLES, busy);
+          $finish;
+        end
       end
+
+      // Record latency stats
+      if (cycles < lat_min) lat_min = cycles;
+      if (cycles > lat_max) lat_max = cycles;
+      lat_sum = lat_sum + cycles;
+
+      if (cycles > 63) lat_hist[63] = lat_hist[63] + 1;
+      else             lat_hist[cycles] = lat_hist[cycles] + 1;
 
       got_ct = ciphertext;
 
@@ -78,6 +105,11 @@ module tb_aes128;
     total = 0;
     pass  = 0;
     fail  = 0;
+
+    lat_min = 1<<30;
+    lat_max = 0;
+    lat_sum = 0;
+    for (i = 0; i < 64; i = i + 1) lat_hist[i] = 0;
 
     // reset for a few cycles
     repeat (5) @(posedge clk);
@@ -104,6 +136,25 @@ module tb_aes128;
 
     $display("=== AES-128 RTL vs OpenSSL ===");
     $display("Total: %0d  Pass: %0d  Fail: %0d", total, pass, fail);
+
+    $display("=== Random Stall Latency Stats (cycles from start->done) ===");
+    $display("Min: %0d  Avg: %0d  Max: %0d",
+             lat_min, (total ? (lat_sum/total) : 0), lat_max);
+
+    $display("Latency distribution (star bar, * = 1 occurrence) [63 includes 63+]");
+
+    for (i = 0; i < 64; i = i + 1) begin
+      if (lat_hist[i] != 0) begin
+        $write("  Latency %0d cycles : ", i);
+
+        // Print one '*' per occurrence
+        for (j = 0; j < lat_hist[i]; j = j + 1)
+          $write("*");
+
+        // Also print numeric count for clarity
+        $display(" (%0d)", lat_hist[i]);
+      end
+    end
 
     if (fail == 0) $display("RESULT: PASS");
     else           $display("RESULT: FAIL");
