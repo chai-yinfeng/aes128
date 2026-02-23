@@ -26,12 +26,30 @@ module aes_top(
   wire        core_done;
   wire [127:0] core_ciphertext;
 
+  // --------------------------------------------------------------------------
+  // Linear Feedback Shift Register (LFSR)
+  // Pseudo-random generator used to randomize round timing (side-channel hiding)
+  //
+  // This is a 16-bit Fibonacci LFSR implementing the primitive polynomial:
+  //   x^16 + x^14 + x^13 + x^11 + 1
+  //
+  // Operation:
+  // - At every clock cycle, the register shifts left by one bit.
+  // - The new LSB is computed as the XOR ("feedback") of selected tap bits.
+  // - These tap positions correspond to the non-zero terms of the polynomial.
+  // --------------------------------------------------------------------------
+  reg [15:0] lfsr;
+  reg        step_en_r;
+  wire       lfsr_fb = lfsr[15] ^ lfsr[13] ^ lfsr[12] ^ lfsr[10];
+  wire       step_en = step_en_r;
+
   aes_core u_core (
     .clk(clk),
     .rst(rst),
     .start(core_start),
     .key(key),
     .plaintext(plaintext),
+    .step_en(step_en),
     .busy(core_busy),
     .done(core_done),
     .ciphertext(core_ciphertext)
@@ -63,10 +81,19 @@ module aes_top(
       ciphertext <= 128'b0;
       fault_flag <= 1'b0;
       done       <= 1'b0;
+      lfsr <= 16'hACE1;
+      step_en_r <= 1'b1;
     end else begin
       // defaults
       core_start <= 1'b0;
       done       <= 1'b0;
+
+      lfsr <= {lfsr[14:0], lfsr_fb};
+      // default: not stall
+      step_en_r <= 1'b1; 
+      if (core_busy) begin
+        step_en_r <= (lfsr[0] | lfsr[1]); // 75% advance, 25% stall
+      end
 
       case (state)
         ST_IDLE: begin
