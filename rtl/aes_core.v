@@ -28,6 +28,7 @@ module aes_core (
     input  wire         start,
     input  wire [127:0] key,
     input  wire [127:0] plaintext,
+    input  wire         step_en, // determine if delay this lap or not
     output reg          busy,
     output reg          done,
     output reg  [127:0] ciphertext
@@ -104,18 +105,21 @@ module aes_core (
         round_key_reg <= key;
 
       end else if (busy) begin
-        // Perform one AES round per cycle (round 1..10).
-        state_reg      <= state_next;
-        round_key_reg  <= rk_next;
+        // if no delay in this lap
+        if (step_en) begin
+          // Perform one AES round per cycle (round 1..10).
+          state_reg      <= state_next;
+          round_key_reg  <= rk_next;
 
-        if (round_ctr_reg == 4'd10) begin
-          // Completed final round this cycle.
-          ciphertext   <= state_next;
-          busy         <= 1'b0;
-          done         <= 1'b1;
-          round_ctr_reg<= 4'd0;
-        end else begin
-          round_ctr_reg<= round_ctr_reg + 4'd1;
+          if (round_ctr_reg == 4'd10) begin
+            // Completed final round this cycle.
+            ciphertext   <= state_next;
+            busy         <= 1'b0;
+            done         <= 1'b1;
+            round_ctr_reg<= 4'd0;
+          end else begin
+            round_ctr_reg<= round_ctr_reg + 4'd1;
+          end
         end
       end
     end

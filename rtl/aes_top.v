@@ -26,12 +26,36 @@ module aes_top(
   wire        core_done;
   wire [127:0] core_ciphertext;
 
+  // --------------------------------------------------------------------------
+  // Linear Feedback Shift Register (LFSR)
+  // Pseudo-random generator used to randomize round timing (side-channel hiding)
+  //
+  // This is a 16-bit Fibonacci LFSR implementing the primitive polynomial:
+  //   x^16 + x^14 + x^13 + x^11 + 1
+  //
+  // Operation:
+  // - At every clock cycle, the register shifts left by one bit.
+  // - The new LSB is computed as the XOR ("feedback") of selected tap bits.
+  // - These tap positions correspond to the non-zero terms of the polynomial.
+  // --------------------------------------------------------------------------
+  reg [15:0] lfsr;
+  reg        step_en_r;
+  reg        step_en_next;
+  wire       lfsr_fb = lfsr[15] ^ lfsr[13] ^ lfsr[12] ^ lfsr[10];
+  wire       step_en = step_en_r;
+
+  // Dummy switching noise generator
+  reg [511:0] noise_reg; 
+  wire [15:0] prn16 = lfsr;
+  wire [511:0] weak_mask   = {32{~prn16}};
+
   aes_core u_core (
     .clk(clk),
     .rst(rst),
     .start(core_start),
     .key(key),
     .plaintext(plaintext),
+    .step_en(step_en),
     .busy(core_busy),
     .done(core_done),
     .ciphertext(core_ciphertext)
@@ -63,10 +87,29 @@ module aes_top(
       ciphertext <= 128'b0;
       fault_flag <= 1'b0;
       done       <= 1'b0;
+      lfsr <= 16'hACE1;
+      step_en_r <= 1'b1;
+      noise_reg <= 512'd0;
     end else begin
       // defaults
       core_start <= 1'b0;
       done       <= 1'b0;
+
+      if (core_busy) lfsr <= {lfsr[14:0], lfsr_fb};
+      // Use combinational assignment to avoid 1-cycle lag from nonblocking assignments
+      step_en_next = 1'b1;
+      if (core_busy) begin
+        step_en_next = (lfsr[0] | lfsr[1]); // 75% advance, 25% stall
+      end
+      step_en_r <= step_en_next;
+
+      // Strong noise during stall cycles, weak noise during active cycles
+      if (core_busy) begin
+        if (step_en_next) // If not stalled: weak flip
+          noise_reg <= noise_reg ^ weak_mask;
+        else // If stalled: all bits are fliped
+          noise_reg <= ~noise_reg;
+      end
 
       case (state)
         ST_IDLE: begin
