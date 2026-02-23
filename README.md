@@ -1,7 +1,7 @@
 # HW-2 AES-128 RTL (Baseline)
 
 This repository contains a minimal, stable **AES-128 encryption** RTL implementation and a reproducible validation setup against **OpenSSL** (reference implementation).
-**No defenses are implemented in this baseline.** The goal is to establish a correct AES-128 core before adding countermeasures.
+The baseline AES core is extended with fault-detection and side-channel countermeasures for research and evaluation.
 
 ---
 
@@ -18,10 +18,12 @@ root/
 ├─ tb/
 │  └─ tb_aes128.sv           # testbench: reads vectors.txt and compares outputs
 │  └─ tb_fault.sv            # testbench: run fault attack and verify the defense
+│  └─ tb_power.sv            # testbench: observe switching activity / power proxy
 ├─ scripts/
 │  └─ gen_vectors.py         # generates OpenSSL reference vectors (ECB, 1-block, no pad)
 ├─ run.sh                    # one-command: generate vectors, compile, simulate
 ├─ run_fault.sh              # based on run.sh, but add verification for fault defense
+├─ run_power.sh              # still based on run.sh, but add verification for power-side defense
 ├─ vectors.txt               # generated test vectors (key pt ct_ref) [will be ignored]
 └─ .gitignore
 ```
@@ -138,3 +140,183 @@ Fault-injection validation:
 
 `tb/tb_fault.sv` injects a transient fault via `force/release` on the internal state register
 during the encryption window, then checks that `fault_flag` asserts.
+---
+## Power Side-Channel Defenses: Randomized Timing & Power Noise
+
+### Randomized Timing (Cycle-Level Stall)
+
+A pseudo-random stall mechanism is added to the AES core execution to obscure timing patterns.
+
+- A 16-bit LFSR generates a pseudo-random sequence
+- Each round advances only when `step_en == 1`
+- When `step_en == 0`, the core stalls for that cycle
+- Stall decisions are applied **only while the core is busy**
+
+This introduces execution time variability while preserving functional correctness.
+
+**Implementation details**
+
+- 16-bit Fibonacci LFSR  
+- Primitive polynomial:  
+  `x^16 + x^14 + x^13 + x^11 + 1`
+- Stall probability ≈ 25% (advance ≈ 75%)
+
+```verilog
+step_en_next = 1'b1;
+if (core_busy) begin
+  step_en_next = (lfsr[0] | lfsr[1]);  // 75% advance, 25% stall
+end
+step_en_r <= step_en_next;
+```
+
+The AES datapath itself is unchanged — only the round controller gating was modified.
+
+### Dummy Switching Power Noise
+
+Additional switching activity is generated during encryption to mask data-dependent power behavior.
+
+- A 512-bit register (`noise_reg`) toggles during execution
+
+- Functionally isolated from the AES datapath
+
+- Produces background dynamic power activity
+
+``` verilog
+if (core_busy) begin
+  if (step_en_next)        // active cycle
+    noise_reg <= noise_reg ^ weak_mask;   // partial toggling
+  else                     // stall cycle
+    noise_reg <= ~noise_reg;              // maximal toggling
+end
+```
+
+This creates higher and more variable switching activity, especially during stall cycles.
+
+### Power Activity Instrumentation (`power_flag`)
+
+To emulate attacker-visible power measurements, the design exposes per-cycle switching activity.
+
+#### New Output Signal
+
+aes_top provides an additional output:
+
+```verilog
+output reg [9:0] power_flag
+```
+
+`power_flag` reports the number of flipped bits in noise_reg during the current cycle.
+
+```
+Dynamic Power ∝ Switching Activity
+```
+#### Flip Count Computation
+
+Each cycle:
+
+```verilog
+flip_count = HammingDistance(noise_reg_next, noise_reg_current)
+```
+
+Two operating modes:
+
+- Active cycle: partial/random flips
+
+- Stall cycle: large-scale inversion → high activity
+
+This signal does not affect functionality and is intended for analysis only.
+
+### Security / Research Purpose
+
+These mechanisms support experiments on side-channel resistance, including:
+
+- Timing obfuscation
+
+- Power noise injection
+
+- Correlation attack mitigation
+
+- Effectiveness of randomized execution
+
+External observers (testbench) can measure:
+
+- Total switching activity
+
+- Average activity per cycle
+
+- Distribution across executions
+
+---
+### How to Run
+
+```bash
+./run_power.sh
+```
+
+Optional: specify number of test vectors:
+
+```
+./run_power.sh 200
+```
+
+### Output Interpretation
+
+During simulation, the testbench prints per-encryption statistics:
+
+```
+[POWER] flips_total=10112 avg_flips_per_cycle=297 (pwr_cycles=34)
+```
+Where:
+
+- flips_total — total bit transitions observed
+
+- pwr_cycles — number of active (busy) cycles
+
+- avg_flips_per_cycle — average switching activity
+
+At the end, global statistics are reported:
+
+```
+=== Power Proxy Stats (attacker-observed) ===
+Total flips: XXXXX
+Total busy cycles: XXXXX
+Avg flips/cycle: XXX
+```
+
+### Waveform Analysis
+
+The simulation also generates:
+```
+power.vcd
+```
+This file can be viewed with GTKWave:
+```
+gtkwave power.vcd
+```
+It contains signal activity for further side-channel analysis.
+
+
+### Result Vitualization
+
+#### Distribution Statistics
+
+Tracks overall timing characteristics:
+
+- Minimum latency
+- Maximum latency
+- Average latency
+- Histogram of cycle counts
+
+#### Visual Star Histogram
+
+Displays occurrence counts using `*`:
+
+```
+  Latency 32 cycles : ********** (10)
+```
+
+
+#### Deadlock Protection
+
+Timeout logic prevents simulation hangs if `done` never asserts.
+
+---
