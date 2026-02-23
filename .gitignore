@@ -1,6 +1,5 @@
 # build outputs
-sim.out
-sim_fault.out
+*.out
 *.vcd
 *.log
 
