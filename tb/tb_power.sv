@@ -96,6 +96,12 @@ module tb_aes128;
   endtask
 
   initial begin
+    // ----------------------------------------------------------------------
+    // Dump VCD waveform (proxy for switching activity / "power")
+    // ----------------------------------------------------------------------
+    $dumpfile("power.vcd");
+    $dumpvars(0, tb_aes128);
+
     // init
     rst = 1'b1;
     start = 1'b0;
