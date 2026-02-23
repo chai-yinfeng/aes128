@@ -15,7 +15,8 @@ module aes_top(
   output wire         busy,
   output reg          done,
   output reg [127:0]  ciphertext,
-  output reg          fault_flag
+  output reg          fault_flag,
+  output reg [9:0]    power_flag
 );
 
   // --------------------------------------------------------------------------
@@ -45,9 +46,28 @@ module aes_top(
   wire       step_en = step_en_r;
 
   // Dummy switching noise generator
-  reg [511:0] noise_reg; 
+  reg [511:0] noise_reg;
+  reg [511:0] noise_prev;
   wire [15:0] prn16 = lfsr;
   wire [511:0] weak_mask   = {32{~prn16}};
+  wire [511:0] noise_next =
+      (core_busy) ?
+        (step_en_next ? (noise_reg ^ weak_mask) : (~noise_reg))
+      : noise_reg;
+
+  wire [9:0] flips_this_cycle = popcount512(noise_prev ^ noise_next);
+
+  // Count how many bits been flipped
+  function [9:0] popcount512(input [511:0] x);
+    integer k;
+    reg [9:0] c;
+    begin
+      c = 10'd0;
+      for (k = 0; k < 512; k = k + 1)
+        c = c + x[k];
+      popcount512 = c;
+    end
+  endfunction
 
   aes_core u_core (
     .clk(clk),
@@ -90,6 +110,8 @@ module aes_top(
       lfsr <= 16'hACE1;
       step_en_r <= 1'b1;
       noise_reg <= 512'd0;
+      noise_prev  <= 512'd0;
+      power_flag  <= 10'd0;
     end else begin
       // defaults
       core_start <= 1'b0;
@@ -105,6 +127,8 @@ module aes_top(
 
       // Strong noise during stall cycles, weak noise during active cycles
       if (core_busy) begin
+        power_flag <= flips_this_cycle;
+        noise_prev <= noise_next;
         if (step_en_next) // If not stalled: weak flip
           noise_reg <= noise_reg ^ weak_mask;
         else // If stalled: all bits are fliped

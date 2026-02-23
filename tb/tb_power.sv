@@ -15,6 +15,7 @@ module tb_aes128;
   wire        busy;
   wire        done;
   wire [127:0] ciphertext;
+  wire [9:0]  power_flag;
 
   // Declare fault_flag to avoid implicit wire warning
   wire fault_flag;
@@ -25,6 +26,8 @@ module tb_aes128;
   integer lat_hist[0:63];
   integer i;
   integer j;
+  integer pwr_sum_all;
+  integer pwr_cycles_all;
   localparam integer TIMEOUT_CYCLES = 2000;
 
   // Instantiate DUT
@@ -37,7 +40,8 @@ module tb_aes128;
     .busy(busy),
     .done(done),
     .ciphertext(ciphertext),
-    .fault_flag(fault_flag)
+    .fault_flag(fault_flag),
+    .power_flag(power_flag)
   );
 
   // Helpers
@@ -51,6 +55,9 @@ module tb_aes128;
   // Task: one encryption transaction
   task automatic run_one(input [127:0] k, input [127:0] pt, input [127:0] expected);
     integer cycles;
+    integer pwr_sum;
+    integer pwr_cycles;
+
     begin
       // Apply inputs
       key       = k;
@@ -62,17 +69,32 @@ module tb_aes128;
       @(negedge clk);
       start = 1'b0;
       
+      pwr_sum    = 0;
+      pwr_cycles = 0;
+
       // Wait for done with timeout and measure latency
       cycles = 0;
       while (done !== 1'b1) begin
         @(posedge clk);
         cycles = cycles + 1;
+        pwr_sum    = pwr_sum + power_flag;
+        pwr_cycles = pwr_cycles + 1;
         if (cycles > TIMEOUT_CYCLES) begin
           $display("[TIMEOUT] key=%032x pt=%032x (no done after %0d cycles) busy=%0d",
                    k, pt, TIMEOUT_CYCLES, busy);
           $finish;
         end
       end
+
+      // Print per-transaction observed power stats
+      $display("[POWER] flips_total=%0d avg_flips_per_cycle=%0d (pwr_cycles=%0d)",
+               pwr_sum,
+               (pwr_cycles ? (pwr_sum / pwr_cycles) : 0),
+               pwr_cycles);
+
+      // Accumulate global stats
+      pwr_sum_all    = pwr_sum_all + pwr_sum;
+      pwr_cycles_all = pwr_cycles_all + pwr_cycles;
 
       // Record latency stats
       if (cycles < lat_min) lat_min = cycles;
@@ -111,6 +133,8 @@ module tb_aes128;
     total = 0;
     pass  = 0;
     fail  = 0;
+    pwr_sum_all    = 0;
+    pwr_cycles_all = 0;
 
     lat_min = 1<<30;
     lat_max = 0;
@@ -142,6 +166,11 @@ module tb_aes128;
 
     $display("=== AES-128 RTL vs OpenSSL ===");
     $display("Total: %0d  Pass: %0d  Fail: %0d", total, pass, fail);
+
+    // Overall average observed power proxy
+    $display("=== Power Proxy Stats (attacker-observed) ===");
+    $display("Total flips: %0d  Total busy cycles: %0d  Avg flips/cycle: %0d",
+             pwr_sum_all, pwr_cycles_all, (pwr_cycles_all ? (pwr_sum_all / pwr_cycles_all) : 0));
 
     $display("=== Random Stall Latency Stats (cycles from start->done) ===");
     $display("Min: %0d  Avg: %0d  Max: %0d",
