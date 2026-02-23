@@ -27,7 +27,8 @@ module tb_fault;
     .busy(busy),
     .done(done),
     .ciphertext(ciphertext),
-    .fault_flag(fault_flag)
+    .fault_flag(fault_flag),
+    .power_flag(power_flag)
   );
 
   // file io
