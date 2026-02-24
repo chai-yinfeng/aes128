@@ -140,7 +140,9 @@ Fault-injection validation:
 
 `tb/tb_fault.sv` injects a transient fault via `force/release` on the internal state register
 during the encryption window, then checks that `fault_flag` asserts.
+
 ---
+
 ## Power Side-Channel Defenses: Randomized Timing & Power Noise
 
 ### Randomized Timing (Cycle-Level Stall)
