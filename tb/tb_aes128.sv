@@ -15,6 +15,8 @@ module tb_aes128;
   wire        busy;
   wire        done;
   wire [127:0] ciphertext;
+  wire        fault_flag;
+  wire [9:0]  power_flag;
 
   // Instantiate DUT
   aes_top dut (

@@ -16,6 +16,7 @@ module tb_fault;
   wire        done;
   wire [127:0] ciphertext;
   wire        fault_flag;
+  wire [9:0]  power_flag;
 
   // Instantiate DUT (fault-defense top)
   aes_top dut (
@@ -65,21 +66,18 @@ module tb_fault;
     end
   endtask
 
-  // Inject a transient fault by flipping one bit of the internal state register
-  // for ~1 cycle.
+  // Inject a transient fault by flipping one bit of core A's state register
+  // for ~1 cycle. Lockstep comparison with core B will raise fault_flag.
   task automatic inject_transient_fault();
     begin
-      // Wait a few cycles after start to be "in the middle" of encryption.
       repeat (4) @(posedge clk);
 
-      // Hierarchical reference into aes_core's state register.
-      snap_state   = dut.u_core.state_reg;
+      snap_state   = dut.u_core_A.state_reg;
       forced_state = snap_state ^ 128'h1;
 
-      // Flip one bit transiently
-      force dut.u_core.state_reg = forced_state;
+      force dut.u_core_A.state_reg = forced_state;
       @(posedge clk);
-      release dut.u_core.state_reg;
+      release dut.u_core_A.state_reg;
     end
   endtask
 
@@ -150,7 +148,7 @@ module tb_fault;
 
     $fclose(fd);
 
-    $display("=== Fault Defense Validation (Temporal Redundancy) ===");
+    $display("=== Fault Defense Validation (Spatial Redundancy / Dual-Core Lockstep) ===");
     $display("No-fault cases : Total=%0d Pass=%0d Fail=%0d", total_ok, pass_ok, fail_ok);
     $display("Fault-injected : Total=%0d Pass=%0d Fail=%0d", total_fault, pass_fault, fail_fault);
 

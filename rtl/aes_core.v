@@ -28,16 +28,19 @@ module aes_core (
     input  wire         start,
     input  wire [127:0] key,
     input  wire [127:0] plaintext,
-    input  wire         step_en, // determine if delay this lap or not
+    input  wire         step_en,    // determine if delay this lap or not
     output reg          busy,
     output reg          done,
-    output reg  [127:0] ciphertext
+    output reg  [127:0] ciphertext,
+    output wire [127:0] state       // exposed for dual-core lockstep comparison
 );
 
   // Internal state and round key registers.
   reg [127:0] state_reg;
   reg [127:0] round_key_reg;   // holds rk[round-1]
   reg [3:0]   round_ctr_reg;   // 1..10
+
+  assign state = state_reg;
 
   // Combinational signals for next round.
   wire [7:0]   rcon_byte;

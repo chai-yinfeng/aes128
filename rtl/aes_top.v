@@ -20,12 +20,22 @@ module aes_top(
 );
 
   // --------------------------------------------------------------------------
-  // Internal interface to aes_core (baseline core is unchanged)
+  // Dual-core lockstep (spatial redundancy): two cores, same inputs, per-round compare
   // --------------------------------------------------------------------------
   reg         core_start;
-  wire        core_busy;
-  wire        core_done;
-  wire [127:0] core_ciphertext;
+  wire        core_A_busy;
+  wire        core_B_busy;
+  wire        core_A_done;
+  wire        core_B_done;
+  wire [127:0] core_A_ciphertext;
+  wire [127:0] core_B_ciphertext;
+  wire [127:0] core_A_state;
+  wire [127:0] core_B_state;
+
+  wire        core_busy  = core_A_busy;   // both in lockstep
+  wire        core_done  = core_A_done;   // both done same cycle
+  wire        state_mismatch = (core_A_busy & core_B_busy) & (core_A_state != core_B_state);
+  reg         fault_detected;
 
   // --------------------------------------------------------------------------
   // Linear Feedback Shift Register (LFSR)
@@ -69,96 +79,111 @@ module aes_top(
     end
   endfunction
 
-  aes_core u_core (
+  aes_core u_core_A (
     .clk(clk),
     .rst(rst),
     .start(core_start),
     .key(key),
     .plaintext(plaintext),
     .step_en(step_en),
-    .busy(core_busy),
-    .done(core_done),
-    .ciphertext(core_ciphertext)
+    .busy(core_A_busy),
+    .done(core_A_done),
+    .ciphertext(core_A_ciphertext),
+    .state(core_A_state)
+  );
+
+  aes_core u_core_B (
+    .clk(clk),
+    .rst(rst),
+    .start(core_start),
+    .key(key),
+    .plaintext(plaintext),
+    .step_en(step_en),
+    .busy(core_B_busy),
+    .done(core_B_done),
+    .ciphertext(core_B_ciphertext),
+    .state(core_B_state)
   );
 
   // Expose busy: top is busy whenever we're in any non-idle state
   assign busy = (state != ST_IDLE);
 
   // --------------------------------------------------------------------------
-  // Temporal redundancy FSM: compute twice and compare
+  // Temporal + spatial redundancy: dual-core lockstep run twice, compare results
+  // - Spatial: per-round compare core_A_state vs core_B_state (fault_detected)
+  // - Temporal: compare ct1 (first run) vs ct2 (second run)
   // --------------------------------------------------------------------------
   localparam ST_IDLE   = 3'd0;
   localparam ST_RUN1   = 3'd1;
   localparam ST_WAIT1  = 3'd2;
   localparam ST_RUN2   = 3'd3;
   localparam ST_WAIT2  = 3'd4;
-  localparam ST_FINISH = 3'd5;
 
   reg [2:0] state;
-
-  reg [127:0] ct1_reg;
+  reg [127:0] ct1_reg;          // first run ciphertext (temporal compare)
+  reg        fault_spatial_1;   // spatial fault seen during first run
 
   always @(posedge clk) begin
     if (rst) begin
-      state      <= ST_IDLE;
-      core_start <= 1'b0;
-
-      ct1_reg    <= 128'b0;
-      ciphertext <= 128'b0;
-      fault_flag <= 1'b0;
-      done       <= 1'b0;
-      lfsr <= 16'hACE1;
-      step_en_r <= 1'b1;
-      noise_reg <= 512'd0;
-      noise_prev  <= 512'd0;
-      power_flag  <= 10'd0;
+      state          <= ST_IDLE;
+      core_start     <= 1'b0;
+      ciphertext     <= 128'b0;
+      fault_flag     <= 1'b0;
+      done           <= 1'b0;
+      fault_detected <= 1'b0;
+      ct1_reg        <= 128'b0;
+      fault_spatial_1<= 1'b0;
+      lfsr           <= 16'hACE1;
+      step_en_r      <= 1'b1;
+      noise_reg      <= 512'd0;
+      noise_prev     <= 512'd0;
+      power_flag     <= 10'd0;
     end else begin
-      // defaults
       core_start <= 1'b0;
       done       <= 1'b0;
 
       if (core_busy) lfsr <= {lfsr[14:0], lfsr_fb};
-      // Use combinational assignment to avoid 1-cycle lag from nonblocking assignments
       step_en_next = 1'b1;
       if (core_busy) begin
         step_en_next = (lfsr[0] | lfsr[1]); // 75% advance, 25% stall
       end
       step_en_r <= step_en_next;
 
+      // Per-round spatial fault: set when state mismatch; clear at start of each run
+      if (state_mismatch)
+        fault_detected <= 1'b1;
+      else if ((state == ST_IDLE && start) || (state == ST_WAIT1 && core_done))
+        fault_detected <= 1'b0;
+
       // Strong noise during stall cycles, weak noise during active cycles
       if (core_busy) begin
         power_flag <= flips_this_cycle;
         noise_prev <= noise_next;
-        if (step_en_next) // If not stalled: weak flip
+        if (step_en_next)
           noise_reg <= noise_reg ^ weak_mask;
-        else // If stalled: all bits are fliped
+        else
           noise_reg <= ~noise_reg;
       end
 
       case (state)
         ST_IDLE: begin
           fault_flag <= 1'b0;
-          // Accept new request only when idle
           if (start) begin
-            // launch first computation
             core_start <= 1'b1;
             state      <= ST_RUN1;
           end
         end
 
-        // RUN1: pulse core_start already asserted in previous cycle.
-        // Move to WAIT1 and wait for core_done.
         ST_RUN1: begin
           state <= ST_WAIT1;
         end
 
         ST_WAIT1: begin
           if (core_done) begin
-            ct1_reg <= core_ciphertext;
-
-            // Launch second computation
-            core_start <= 1'b1;
-            state      <= ST_RUN2;
+            ct1_reg         <= core_A_ciphertext;
+            fault_spatial_1 <= fault_detected;
+            core_start      <= 1'b1;
+            state           <= ST_RUN2;
           end
         end
 
@@ -168,23 +193,20 @@ module aes_top(
 
         ST_WAIT2: begin
           if (core_done) begin
-            // Compare second result to first
-            if (core_ciphertext == ct1_reg) begin
-              ciphertext <= core_ciphertext;
-              fault_flag <= 1'b0;
-            end else begin
-              ciphertext <= 128'b0;     // suppress valid output on mismatch
+            // Temporal: ct1 vs second run; spatial: fault in run1 or run2
+            if (fault_spatial_1 || fault_detected || (core_A_ciphertext != ct1_reg)) begin
+              ciphertext <= 128'b0;
               fault_flag <= 1'b1;
+            end else begin
+              ciphertext <= core_A_ciphertext;
+              fault_flag <= 1'b0;
             end
-
-            done  <= 1'b1;              // 1-cycle pulse
+            done  <= 1'b1;
             state <= ST_IDLE;
           end
         end
 
-        default: begin
-          state <= ST_IDLE;
-        end
+        default: state <= ST_IDLE;
       endcase
     end
   end

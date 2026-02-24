@@ -102,25 +102,47 @@ RESULT: PASS
 
 ---
 
-## Fault Defense: Temporal Redundancy (Compute-and-Compare)
+## Fault Defense: Temporal + Spatial Redundancy
 
 ### Summary
 
-A fault-detection countermeasure is implemented using **temporal redundancy**:
+Fault detection uses **both temporal and spatial redundancy** in one design:
 
-* Run AES-128 encryption **twice** on the same `(key, plaintext)`
-* Compare the two ciphertexts
+* **Spatial redundancy (dual-core lockstep)**  
+  Two AES cores run in parallel with the same `(key, plaintext)` and the same `step_en`.  
+  Each cycle, the two internal states are compared (`core_A_state` vs `core_B_state`).  
+  If they differ at any round, a spatial fault is recorded.
 
-  * If equal: output ciphertext and set `fault_flag=0`
-  * If mismatch: set `fault_flag=1` and suppress valid output (ciphertext is forced to `0`)
+* **Temporal redundancy (compute twice, compare)**  
+  The dual-core block above is run **twice** on the same input.  
+  The first ciphertext is stored in `ct1_reg`; the second run’s ciphertext is compared to it.  
+  If the two ciphertexts differ, a temporal fault is recorded.
 
-This targets **transient fault injection** (e.g., single-cycle bit flips during computation).
+* **Fault outcome**  
+  If either a spatial fault (in run 1 or run 2) or a temporal fault (ct1 ≠ ct2) is detected:  
+  `fault_flag=1` and the output ciphertext is forced to `0`.  
+  Otherwise: `fault_flag=0` and the ciphertext is the (consistent) result.
+
+This combination targets **transient fault injection** and makes it harder for an attacker to bypass both per-round comparison and end-to-end comparison.
+
+### Flow and Key Signals
+
+* **FSM (in `aes_top.v`)**  
+  `ST_IDLE` → `ST_RUN1` → `ST_WAIT1` → `ST_RUN2` → `ST_WAIT2` → `ST_IDLE`.  
+  Run1 and Run2 each use the same two cores in lockstep; Run2 starts when Run1’s `core_done` is seen.
+
+* **Signals (conceptual)**  
+  * `fault_detected`: set when `core_A_state != core_B_state` during a run; cleared at the start of each run.  
+  * `fault_spatial_1`: holds the spatial-fault flag from Run1 when leaving `ST_WAIT1`.  
+  * `ct1_reg`: ciphertext from Run1, used for temporal comparison when Run2 completes.  
+  * `fault_flag` (output): `1` if `fault_spatial_1` or `fault_detected` (Run2) or `(core_A_ciphertext != ct1_reg)`; else `0`.  
+  When `fault_flag=1`, ciphertext output is suppressed (forced to zero).
 
 ### Interface
 
-`aes_top` exposes an additional output:
+`aes_top` exposes:
 
-* `fault_flag`: indicates mismatch between the two computations
+* `fault_flag`: indicates that a fault was detected (spatial and/or temporal); valid on `done`.
 
 ### How to Run
 
@@ -138,9 +160,11 @@ Fault-injection validation:
 
 ### Fault Injection Method (Simulation)
 
-`tb/tb_fault.sv` injects a transient fault via `force/release` on the internal state register
-during the encryption window, then checks that `fault_flag` asserts.
+`tb/tb_fault.sv` injects a transient fault via `force/release` on **core A’s** state register  
+(`dut.u_core_A.state_reg`) during encryption. The lockstep comparison with core B detects the mismatch and the design sets `fault_flag=1`.
+
 ---
+
 ## Power Side-Channel Defenses: Randomized Timing & Power Noise
 
 ### Randomized Timing (Cycle-Level Stall)
